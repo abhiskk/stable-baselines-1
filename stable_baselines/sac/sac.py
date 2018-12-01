@@ -42,8 +42,6 @@ class SAC(OffPolicyRLModel):
         self.gradient_steps = gradient_steps
         self.gamma = gamma
 
-        self.qf1 = None
-        self.qf2 = None
         self.value_fn = None
         self.mu = None
         self.graph = None
@@ -83,7 +81,6 @@ class SAC(OffPolicyRLModel):
                     self.policy_tf = self.policy(self.sess, self.observation_space, self.action_space, 1, 1, None)
                     self.target_policy = self.policy(self.sess, self.observation_space, self.action_space, 1, 1, None)
 
-                    # TODO; check ph between processed or not
                     self.observations_ph = self.policy_tf.obs_ph
                     self.next_observations_ph = self.target_policy.obs_ph
                     self.action_target = self.target_policy.action_ph
@@ -101,7 +98,6 @@ class SAC(OffPolicyRLModel):
                     qf1_pi, qf2_pi, _ = self.policy_tf.make_critics(self.observations_ph,
                                                                    pi, create_qf=True, create_vf=False,
                                                                    reuse=True)
-                    self.qf1, self.qf2, = qf1, qf2
 
                 with tf.variable_scope("target", reuse=False):
                     _, _, value_target = self.target_policy.make_critics(self.next_observations_ph,
@@ -280,6 +276,7 @@ class SAC(OffPolicyRLModel):
                     # for (loss_val, loss_name) in zip(loss_vals, self.loss_names):
                     #     logger.logkv(loss_name, loss_val)
                     logger.dumpkvs()
+            return self
 
     def action_probability(self, observation, state=None, mask=None):
         raise NotImplementedError
