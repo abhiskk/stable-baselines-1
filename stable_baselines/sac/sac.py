@@ -23,7 +23,7 @@ class SAC(OffPolicyRLModel):
 
     def __init__(self, policy, env, gamma=0.99, learning_rate=3e-3, buffer_size=50000,
                  learning_starts=100, train_freq=1, batch_size=32,
-                 tau=0.001, reward_scale=1, target_update_interval=1, gradient_steps=4,
+                 tau=0.001, reward_scale=10, target_update_interval=1, gradient_steps=2,
                  verbose=0, tensorboard_log=None, _init_setup_model=True):
         super(SAC, self).__init__(policy=policy, env=env, replay_buffer=None, verbose=verbose,
                                   policy_base=SACPolicy, requires_vec_env=False)
@@ -58,7 +58,6 @@ class SAC(OffPolicyRLModel):
 
         self.obs_target = None
         self.target_policy = None
-        self.actions_policy_ph = None
         self.critic_target = None
         self.actions_ph = None
         self.rewards_ph = None
@@ -86,7 +85,6 @@ class SAC(OffPolicyRLModel):
 
                     # TODO; check ph between processed or not
                     self.observations_ph = self.policy_tf.obs_ph
-                    self.actions_policy_ph = self.policy_tf.action_ph
                     self.next_observations_ph = self.target_policy.obs_ph
                     self.action_target = self.target_policy.action_ph
                     self.terminals_ph = tf.placeholder(tf.float32, shape=(None, 1), name='terminals')
@@ -106,9 +104,8 @@ class SAC(OffPolicyRLModel):
                     self.qf1, self.qf2, = qf1, qf2
 
                 with tf.variable_scope("target", reuse=False):
-                    _, target_pi, _ = self.target_policy.make_actor(self.next_observations_ph)
                     _, _, value_target = self.target_policy.make_critics(self.next_observations_ph,
-                                                                         target_pi, create_qf=False, create_vf=True)
+                                                                         create_qf=False, create_vf=True)
                     self.value_target = value_target
 
                 with tf.variable_scope("loss", reuse=False):
@@ -182,7 +179,8 @@ class SAC(OffPolicyRLModel):
                     # tf.summary.histogram('critic_target', self.critic_target)
 
                 with tf.variable_scope("input_info", reuse=False):
-                    tf.summary.scalar('rewards', tf.reduce_mean(self.rewards_ph))
+                    pass
+                    # tf.summary.scalar('rewards', tf.reduce_mean(self.rewards_ph))
                     # tf.summary.histogram('rewards', self.rewards_ph)
 
                 # IMPORTANT: are the target variables also saved ?

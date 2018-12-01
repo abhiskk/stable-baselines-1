@@ -58,7 +58,7 @@ class SACPolicy(BasePolicy):
 
     def __init__(self, sess, ob_space, ac_space, n_env, n_steps, n_batch, n_lstm=256, reuse=False, scale=False):
         super(SACPolicy, self).__init__(sess, ob_space, ac_space, n_env, n_steps, n_batch, n_lstm=n_lstm, reuse=reuse,
-                                        scale=scale, add_action_ph=True)
+                                        scale=scale)
         assert isinstance(ac_space, Box), "Error: the action space must be of type gym.spaces.Box"
         assert (np.abs(ac_space.low) == ac_space.high).all(), "Error: the action space low and high must be symmetric"
 
@@ -183,16 +183,12 @@ class FeedForwardPolicy(SACPolicy):
                      create_vf=True, create_qf=True):
         if obs is None:
             obs = self.processed_x
-        if action is None:
-            action = self.action_ph
-
 
         with tf.variable_scope(scope, reuse=reuse):
             if self.feature_extraction == "cnn":
                 critics_h = self.cnn_extractor(obs, **self.cnn_kwargs)
             else:
                 critics_h = tf.layers.flatten(obs)
-
 
             if create_vf:
                 with tf.variable_scope('vf', reuse=reuse):
@@ -213,7 +209,7 @@ class FeedForwardPolicy(SACPolicy):
 
                 self.qf1 = qf1
                 self.qf2 = qf2
-                
+
         return self.qf1, self.qf2, self.value_fn
 
     def step(self, obs, state=None, mask=None, deterministic=False):

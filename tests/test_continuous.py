@@ -44,13 +44,8 @@ def test_model_manipulation(model_class):
     try:
         env = DummyVecEnv([lambda: IdentityEnvBox(eps=0.5)])
 
-        kwargs = {}
-        if model_class == SAC:
-            # Update tradeoff between exploration/exploitation
-            kwargs = {'reward_scale': 10}
-
         # create and train
-        model = model_class(policy="MlpPolicy", env=env, **kwargs)
+        model = model_class(policy="MlpPolicy", env=env)
         model.learn(total_timesteps=NUM_TIMESTEPS, seed=0)
 
         # predict and measure the acc reward
