@@ -1,3 +1,5 @@
+import time
+
 import numpy as np
 import tensorflow as tf
 
@@ -6,6 +8,7 @@ from stable_baselines.common import tf_util, OffPolicyRLModel, SetVerbosity, Ten
 from stable_baselines.common.vec_env import VecEnv
 from stable_baselines.deepq.replay_buffer import ReplayBuffer
 from stable_baselines.sac.policies import SACPolicy
+from stable_baselines import logger
 
 
 def get_vars(scope):
@@ -18,11 +21,8 @@ def get_vars(scope):
 class SAC(OffPolicyRLModel):
     """Soft Actor-Critic"""
 
-    def action_probability(self, observation, state=None, mask=None):
-        pass
-
     def __init__(self, policy, env, gamma=0.99, learning_rate=3e-3, buffer_size=50000,
-                 learning_starts=1000, train_freq=1, batch_size=32,
+                 learning_starts=100, train_freq=1, batch_size=32,
                  tau=0.001, reward_scale=1, target_update_interval=1, gradient_steps=4,
                  verbose=0, tensorboard_log=None, _init_setup_model=True):
         super(SAC, self).__init__(policy=policy, env=env, replay_buffer=None, verbose=verbose,
@@ -58,7 +58,7 @@ class SAC(OffPolicyRLModel):
 
         self.obs_target = None
         self.target_policy = None
-        self.action_train_ph = None
+        self.actions_policy_ph = None
         self.critic_target = None
         self.actions_ph = None
         self.rewards_ph = None
@@ -84,31 +84,31 @@ class SAC(OffPolicyRLModel):
                     self.policy_tf = self.policy(self.sess, self.observation_space, self.action_space, 1, 1, None)
                     self.target_policy = self.policy(self.sess, self.observation_space, self.action_space, 1, 1, None)
 
-                    self.next_observations_ph = self.target_policy.obs_ph
-                    self.action_target = self.target_policy.action_ph
                     # TODO; check ph between processed or not
                     self.observations_ph = self.policy_tf.obs_ph
-                    self.action_train_ph = self.policy_tf.action_ph
+                    self.actions_policy_ph = self.policy_tf.action_ph
+                    self.next_observations_ph = self.target_policy.obs_ph
+                    self.action_target = self.target_policy.action_ph
                     self.terminals_ph = tf.placeholder(tf.float32, shape=(None, 1), name='terminals')
                     self.rewards_ph = tf.placeholder(tf.float32, shape=(None, 1), name='rewards')
                     self.actions_ph = tf.placeholder(tf.float32, shape=(None,) + self.action_space.shape,
                                                      name='actions')
                     self.critic_target = tf.placeholder(tf.float32, shape=(None, 1), name='critic_target')
-                    # self.observations_ph = self.policy_tf.processed_x
-                    # self.next_observations_ph = self.target_policy.processed_x
+
 
                 with tf.variable_scope("model", reuse=False):
                     mu, pi, logp_pi = self.policy_tf.make_actor(self.observations_ph)
-                    qf1, qf2, value_fn = self.policy_tf.make_critics(self.observations_ph, self.actions_ph)
+                    qf1, qf2, value_fn = self.policy_tf.make_critics(self.observations_ph, self.actions_ph,
+                                                              create_qf=True, create_vf=True)
                     qf1_pi, qf2_pi, _ = self.policy_tf.make_critics(self.observations_ph,
-                                                                   self.actions_ph,
+                                                                   pi, create_qf=True, create_vf=False,
                                                                    reuse=True)
                     self.qf1, self.qf2, = qf1, qf2
 
                 with tf.variable_scope("target", reuse=False):
+                    _, target_pi, _ = self.target_policy.make_actor(self.next_observations_ph)
                     _, _, value_target = self.target_policy.make_critics(self.next_observations_ph,
-                                                                        self.target_policy.make_actor(
-                                                                            self.next_observations_ph)[1])
+                                                                         target_pi, create_qf=False, create_vf=True)
                     self.value_target = value_target
 
                 with tf.variable_scope("loss", reuse=False):
@@ -152,33 +152,32 @@ class SAC(OffPolicyRLModel):
                     value_optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate)
                     values_params = get_vars('model/values_fn')
 
+                    source_params = get_vars("model/values_fn/vf")
+                    target_params = get_vars("target/values_fn/vf")
+
+                    # Polyak averaging for target variables
+                    self.target_update_op = [
+                        tf.assign(target, (1 - self.tau) * target + self.tau * source)
+                        for target, source in zip(target_params, source_params)
+                    ]
+                    # Initializing targets to match source variables
+                    target_init_op = [
+                        tf.assign(target, source)
+                        for target, source in zip(target_params, source_params)
+                    ]
+
+                    # (control flow because sess.run otherwise evaluates in nondeterministic order)
                     with tf.control_dependencies([policy_train_op]):
                         train_values_op = value_optimizer.minimize(values_losses, var_list=values_params)
 
-                        # Polyak averaging for target variables
-                        # (control flow because sess.run otherwise evaluates in nondeterministic order)
-                        with tf.control_dependencies([train_values_op]):
-                            source_params = get_vars("model/values_fn/vf")
-                            target_params = get_vars("target/values_fn/vf")
+                        # All ops to call during one training step
+                        self.step_ops = [policy_loss, qf1_loss, qf2_loss,
+                                         value_loss, qf1, qf2, value_fn, logp_pi,
+                                         policy_train_op, train_values_op]
 
-                            target_update_op = [
-                                tf.assign(target, (1 - self.tau) * target + self.tau * source)
-                                for target, source in zip(target_params, source_params)
-                            ]
 
-                            # All ops to call during one training step
-                            self.step_ops = [policy_loss, qf1_loss, qf2_loss,
-                                             value_loss, qf1, qf2, value_fn, logp_pi,
-                                             policy_train_op, train_values_op, target_update_op]
-
-                            # Initializing targets to match source variables
-                            target_init_op = [
-                                tf.assign(target, source)
-                                for target, source in zip(target_params, source_params)
-                            ]
-
-                        # tf.summary.scalar('actor_loss', self.actor_loss)
-                        # tf.summary.scalar('critic_loss', self.critic_loss)
+                    # tf.summary.scalar('actor_loss', self.actor_loss)
+                    # tf.summary.scalar('critic_loss', self.critic_loss)
                     # tf.summary.scalar('critic_target', tf.reduce_mean(self.critic_target))
                     # tf.summary.histogram('critic_target', self.critic_target)
 
@@ -193,27 +192,33 @@ class SAC(OffPolicyRLModel):
                     self.sess.run(tf.global_variables_initializer())
                     self.sess.run(target_init_op)
 
-                # self.summary = tf.summary.merge_all()
+                self.summary = tf.summary.merge_all()
 
     def _train_step(self, step, writer, log=False):
         batch = self.replay_buffer.sample(self.batch_size)
         batch_obs, batch_actions, batch_rewards, batch_next_obs, batch_dones = batch
 
+
         feed_dict = {
             self.observations_ph: batch_obs,
             self.actions_ph: batch_actions,
             self.next_observations_ph: batch_next_obs,
-            self.rewards_ph: batch_rewards,
-            self.terminals_ph: batch_dones,
+            self.rewards_ph: batch_rewards.reshape(self.batch_size, -1),
+            self.terminals_ph: batch_dones.reshape(self.batch_size, -1),
         }
-
-        out = self.sess.run(self.step_ops, feed_dict)
-        policy_loss, qf1_loss, qf2_loss, value_loss, qf1, qf2, value_fn, logp_pi = out
+        if writer is not None:
+            out = self.sess.run([self.summary] + self.step_ops, feed_dict)
+            summary, policy_loss, qf1_loss, qf2_loss, value_loss, qf1, qf2, value_fn, logp_pi, _, _ = out
+            writer.add_summary(summary, step)
+        else:
+            out = self.sess.run(self.step_ops, feed_dict)
+            policy_loss, qf1_loss, qf2_loss, value_loss, qf1, qf2, value_fn, logp_pi, _, _ = out
 
     def learn(self, total_timesteps, callback=None, seed=None, log_interval=100, tb_log_name="SAC"):
         with SetVerbosity(self.verbose), TensorboardWriter(self.graph, self.tensorboard_log, tb_log_name) as writer:
             self._setup_learn(seed)
 
+            start_time = time.time()
             episode_rewards = [0.0]
             obs = self.env.reset()
             reset = True
@@ -226,7 +231,10 @@ class SAC(OffPolicyRLModel):
                     if callback(locals(), globals()) is False:
                         break
 
-                action = self.policy_tf.step(obs, deterministic=False)
+
+                action = self.policy_tf.step(obs[None], deterministic=False).flatten()
+                assert action.shape == self.env.action_space.shape
+
                 new_obs, reward, done, _ = self.env.step(action * np.abs(self.action_space.low))
                 # Store transition in the replay buffer.
                 self.replay_buffer.add(obs, action, reward, new_obs, float(done))
@@ -238,19 +246,45 @@ class SAC(OffPolicyRLModel):
                     self.episode_reward = total_episode_reward_logger(self.episode_reward, ep_reward,
                                                                       ep_done, writer, step)
 
-                for _ in range(self.gradient_steps):
-                    if step < self.batch_size:
+                for grad_step in range(self.gradient_steps):
+                    if step < self.batch_size or step < self.learning_starts:
                         break
                     self._train_step(step, writer)
-                    # if step % self.target_update_interval == 0:
-                    #     # Run target ops here.
-                    #     self.sess.run(self.target_ops)
+                    if (step + grad_step) % self.target_update_interval == 0:
+                        # Update target network
+                        self.sess.run(self.target_update_op)
 
                 episode_rewards[-1] += reward
                 if done:
                     if not isinstance(self.env, VecEnv):
                         obs = self.env.reset()
                     episode_rewards.append(0.0)
+
+                if len(episode_rewards[-101:-1]) == 0:
+                    mean_reward = -np.inf
+                else:
+                    mean_reward = round(float(np.mean(episode_rewards[-101:-1])), 1)
+
+                num_episodes = len(episode_rewards)
+                if self.verbose >= 1 and done and log_interval is not None and len(episode_rewards) % log_interval == 0:
+                    fps = int(step / (time.time() - start_time))
+                    logger.logkv("Total Timesteps", step)
+                    logger.logkv("Episodes", num_episodes)
+                    logger.logkv("Mean 100 episode reward", mean_reward)
+                    # logger.logkv('eplenmean', )
+                    # TODO: log entropy + explained variance
+                    # + losses
+                    # explained_var = explained_variance(values, returns)
+                    # logger.logkv("nupdates", update)
+                    logger.logkv("fps", fps)
+                    # logger.logkv("explained_variance", float(explained_var))
+                    # logger.logkv('time_elapsed', t_start - t_first_start)
+                    # for (loss_val, loss_name) in zip(loss_vals, self.loss_names):
+                    #     logger.logkv(loss_name, loss_val)
+                    logger.dumpkvs()
+
+    def action_probability(self, observation, state=None, mask=None):
+        raise NotImplementedError
 
     def predict(self, observation, state=None, mask=None, deterministic=True):
         observation = np.array(observation)
