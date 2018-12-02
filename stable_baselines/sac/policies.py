@@ -24,7 +24,7 @@ def gaussian_logp(input_, mu, log_std):
     return tf.reduce_sum(pre_sum, axis=1)
 
 
-def mlp(input_ph, layers, activ_fn=tf.tanh, layer_norm=False):
+def mlp(input_ph, layers, activ_fn=tf.nn.relu, layer_norm=False):
     """
     Create a multi-layer fully connected neural network.
 
@@ -186,7 +186,7 @@ class FeedForwardPolicy(SACPolicy):
 
         assert len(layers) >= 1, "Error: must have at least one hidden layer for the policy."
 
-        self.activ_fn = tf.tanh
+        self.activ_fn = tf.nn.relu
 
     def make_actor(self, obs=None, reuse=False, scope="pi"):
         if obs is None:

@@ -51,7 +51,7 @@ class SAC(OffPolicyRLModel):
 
     def __init__(self, policy, env, gamma=0.99, learning_rate=3e-3, buffer_size=50000,
                  learning_starts=100, train_freq=1, batch_size=32,
-                 tau=0.001, reward_scale=10, target_update_interval=1, gradient_steps=2,
+                 tau=0.005, reward_scale=10, target_update_interval=1, gradient_steps=2,
                  verbose=0, tensorboard_log=None, _init_setup_model=True):
         super(SAC, self).__init__(policy=policy, env=env, replay_buffer=None, verbose=verbose,
                                   policy_base=SACPolicy, requires_vec_env=False)
@@ -134,7 +134,7 @@ class SAC(OffPolicyRLModel):
                     self.value_target = value_target
 
                 with tf.variable_scope("loss", reuse=False):
-                    # Min Double-Q
+                    # Take the min of the two Q-Values (Double-Q Learning)
                     min_qf_pi = tf.minimum(qf1_pi, qf2_pi)
 
                     # Targets for Q and V regression
@@ -167,7 +167,8 @@ class SAC(OffPolicyRLModel):
                     policy_train_op = policy_optimizer.minimize(policy_loss, var_list=get_vars('model/pi'))
 
                     # Value train op
-                    # (control dep of policy_train_op because sess.run otherwise evaluates in nondeterministic order)
+                    # (control dep of policy_train_op because sess.run otherwise
+                    # evaluates in nondeterministic order)
                     value_optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate)
                     values_params = get_vars('model/values_fn')
 
