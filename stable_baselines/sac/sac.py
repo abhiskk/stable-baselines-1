@@ -13,13 +13,41 @@ from stable_baselines import logger
 
 def get_vars(scope):
     """
-    Alias
+    Alias for get_trainable_vars
+
+    :param scope: (str)
+    :return: [tf Variable]
     """
     return tf_util.get_trainable_vars(scope)
 
 
 class SAC(OffPolicyRLModel):
-    """Soft Actor-Critic"""
+    """
+    Soft Actor-Critic (SAC)
+    Off-Policy Maximum Entropy Deep Reinforcement Learning with a Stochastic Actor,
+    This implementation borrows code from original implementation (https://github.com/haarnoja/sac)
+    and from OpenAI Spinning (https://github.com/openai/spinningup)
+    Paper: https://arxiv.org/abs/1801.01290
+    Introduction to SAC: https://spinningup.openai.com/en/latest/algorithms/sac.html
+
+    :param policy: (SACPolicy or str) The policy model to use (MlpPolicy, CnnPolicy, LnMlpPolicy, ...)
+    :param env: (Gym environment or str) The environment to learn from (if registered in Gym, can be str)
+    :param gamma: (float) the discount factor
+    :param learning_rate: (float) learning rate for adam optimizer,
+        the same learning rate will be used for all networks (Q-Values, Actor and Value function)
+    :param buffer_size: (int) size of the replay buffer
+    :param batch_size: (int) Minibatch size for each gradient update
+    :param tau: (float) the soft update coefficient ("polyak update", between 0 and 1)
+    :param reward_scale: (float) Scaling factor for raw reward. (entropy factor)
+        this is one of the most important hyperparameter for SAC
+    :param train_freq: (int) Update the model every `train_freq` steps.
+    :param learning_starts: (int) how many steps of the model to collect transitions for before learning starts
+    :param target_update_interval: (int) update the target network every `target_network_update_freq` steps.
+    :param gradient_steps: (int) How many gradient update after each step
+    :param verbose: (int) the verbosity level: 0 none, 1 training information, 2 tensorflow debug
+    :param tensorboard_log: (str) the log location for tensorboard (if None, no logging)
+    :param _init_setup_model: (bool) Whether or not to build the network at the creation of the instance
+    """
 
     def __init__(self, policy, env, gamma=0.99, learning_rate=3e-3, buffer_size=50000,
                  learning_starts=100, train_freq=1, batch_size=32,
@@ -34,6 +62,7 @@ class SAC(OffPolicyRLModel):
         self.train_freq = train_freq
         self.batch_size = batch_size
         self.tau = tau
+        # In the original paper, same learning rate is used for all networks
         # self.policy_lr = learning_rate
         # self.qf_lr = learning_rate
         # self.vf_lr = learning_rate
@@ -56,7 +85,6 @@ class SAC(OffPolicyRLModel):
 
         self.obs_target = None
         self.target_policy = None
-        self.critic_target = None
         self.actions_ph = None
         self.rewards_ph = None
         self.terminals_ph = None
@@ -65,6 +93,7 @@ class SAC(OffPolicyRLModel):
         self.next_observations_ph = None
         self.value_target = None
         self.step_ops = None
+        self.target_update_op = None
 
         if _init_setup_model:
             self.setup_model()
@@ -78,9 +107,10 @@ class SAC(OffPolicyRLModel):
                 self.replay_buffer = ReplayBuffer(self.buffer_size)
 
                 with tf.variable_scope("input", reuse=False):
-                    self.policy_tf = self.policy(self.sess, self.observation_space, self.action_space, 1, 1, None)
-                    self.target_policy = self.policy(self.sess, self.observation_space, self.action_space, 1, 1, None)
+                    self.policy_tf = self.policy(self.sess, self.observation_space, self.action_space)
+                    self.target_policy = self.policy(self.sess, self.observation_space, self.action_space)
 
+                    # Initialize Placeholders
                     self.observations_ph = self.policy_tf.obs_ph
                     self.next_observations_ph = self.target_policy.obs_ph
                     self.action_target = self.target_policy.action_ph
@@ -88,16 +118,15 @@ class SAC(OffPolicyRLModel):
                     self.rewards_ph = tf.placeholder(tf.float32, shape=(None, 1), name='rewards')
                     self.actions_ph = tf.placeholder(tf.float32, shape=(None,) + self.action_space.shape,
                                                      name='actions')
-                    self.critic_target = tf.placeholder(tf.float32, shape=(None, 1), name='critic_target')
-
 
                 with tf.variable_scope("model", reuse=False):
                     mu, pi, logp_pi = self.policy_tf.make_actor(self.observations_ph)
+                    #  Use two Q-functions to improve performance by reducing overestimation bias.
                     qf1, qf2, value_fn = self.policy_tf.make_critics(self.observations_ph, self.actions_ph,
-                                                              create_qf=True, create_vf=True)
+                                                                     create_qf=True, create_vf=True)
                     qf1_pi, qf2_pi, _ = self.policy_tf.make_critics(self.observations_ph,
-                                                                   pi, create_qf=True, create_vf=False,
-                                                                   reuse=True)
+                                                                    pi, create_qf=True, create_vf=False,
+                                                                    reuse=True)
 
                 with tf.variable_scope("target", reuse=False):
                     _, _, value_target = self.target_policy.make_critics(self.next_observations_ph,
@@ -119,12 +148,9 @@ class SAC(OffPolicyRLModel):
 
                     policy_kl_loss = tf.reduce_mean(logp_pi - min_qf_pi)
 
-                    # policy_regularization_losses = tf.get_collection(
-                    #     tf.GraphKeys.REGULARIZATION_LOSSES,
-                    #     scope=self._policy.name)
-                    # policy_regularization_loss = tf.reduce_sum(
-                    #     policy_regularization_losses)
-
+                    # NOTE: in the original paper, they have an additional
+                    # regularization loss for the gaussian parameters
+                    # this is not used for now
                     # policy_loss = (policy_kl_loss + policy_regularization_loss)
                     policy_loss = policy_kl_loss
 
@@ -168,11 +194,8 @@ class SAC(OffPolicyRLModel):
                                          value_loss, qf1, qf2, value_fn, logp_pi,
                                          policy_train_op, train_values_op]
 
-
                     # tf.summary.scalar('actor_loss', self.actor_loss)
                     # tf.summary.scalar('critic_loss', self.critic_loss)
-                    # tf.summary.scalar('critic_target', tf.reduce_mean(self.critic_target))
-                    # tf.summary.histogram('critic_target', self.critic_target)
 
                 with tf.variable_scope("input_info", reuse=False):
                     pass
@@ -182,6 +205,7 @@ class SAC(OffPolicyRLModel):
                 # IMPORTANT: are the target variables also saved ?
                 self.params = find_trainable_variables("model")
 
+                # Initialize Variables and target network
                 with self.sess.as_default():
                     self.sess.run(tf.global_variables_initializer())
                     self.sess.run(target_init_op)
@@ -191,7 +215,6 @@ class SAC(OffPolicyRLModel):
     def _train_step(self, step, writer, log=False):
         batch = self.replay_buffer.sample(self.batch_size)
         batch_obs, batch_actions, batch_rewards, batch_next_obs, batch_dones = batch
-
 
         feed_dict = {
             self.observations_ph: batch_obs,
@@ -224,7 +247,6 @@ class SAC(OffPolicyRLModel):
                     # compatibility with callbacks that have no return statement.
                     if callback(locals(), globals()) is False:
                         break
-
 
                 action = self.policy_tf.step(obs[None], deterministic=False).flatten()
                 assert action.shape == self.env.action_space.shape

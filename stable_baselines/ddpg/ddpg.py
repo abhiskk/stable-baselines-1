@@ -138,7 +138,7 @@ class DDPG(OffPolicyRLModel):
 
     :param policy: (DDPGPolicy or str) The policy model to use (MlpPolicy, CnnPolicy, LnMlpPolicy, ...)
     :param env: (Gym environment or str) The environment to learn from (if registered in Gym, can be str)
-    :param gamma: (float) the discount rate
+    :param gamma: (float) the discount factor
     :param memory_policy: (Memory) the replay buffer (if None, default to baselines.ddpg.memory.Memory)
     :param eval_env: (Gym Environment) the evaluation environment (can be None)
     :param nb_train_steps: (int) the number of training steps
