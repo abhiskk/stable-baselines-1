@@ -1,4 +1,5 @@
 import time
+from collections import deque
 
 import numpy as np
 import tensorflow as tf
@@ -7,6 +8,7 @@ from stable_baselines.a2c.utils import find_trainable_variables, total_episode_r
 from stable_baselines.common import tf_util, OffPolicyRLModel, SetVerbosity, TensorboardWriter
 from stable_baselines.common.vec_env import VecEnv
 from stable_baselines.deepq.replay_buffer import ReplayBuffer
+from stable_baselines.ppo2.ppo2 import safe_mean
 from stable_baselines.sac.policies import SACPolicy
 from stable_baselines import logger
 
@@ -146,7 +148,8 @@ class SAC(OffPolicyRLModel):
                     qf1_loss = 0.5 * tf.reduce_mean((q_backup - qf1) ** 2)
                     qf2_loss = 0.5 * tf.reduce_mean((q_backup - qf2) ** 2)
 
-                    policy_kl_loss = tf.reduce_mean(logp_pi - min_qf_pi)
+                    # Alternative: policy_kl_loss = tf.reduce_mean(logp_pi - min_qf_pi)
+                    policy_kl_loss = tf.reduce_mean(logp_pi - qf1_pi)
 
                     # NOTE: in the original paper, they have an additional
                     # regularization loss for the gaussian parameters
@@ -213,7 +216,7 @@ class SAC(OffPolicyRLModel):
 
                 self.summary = tf.summary.merge_all()
 
-    def _train_step(self, step, writer, log=False):
+    def _train_step(self, step, writer):
         batch = self.replay_buffer.sample(self.batch_size)
         batch_obs, batch_actions, batch_rewards, batch_next_obs, batch_dones = batch
 
@@ -241,6 +244,7 @@ class SAC(OffPolicyRLModel):
             obs = self.env.reset()
             reset = True
             self.episode_reward = np.zeros((1,))
+            ep_info_buf = deque(maxlen=100)
 
             for step in range(total_timesteps):
                 if callback is not None:
@@ -249,13 +253,30 @@ class SAC(OffPolicyRLModel):
                     if callback(locals(), globals()) is False:
                         break
 
-                action = self.policy_tf.step(obs[None], deterministic=False).flatten()
+                # Before training starts, randomly sample actions
+                # from a uniform distribution for better exploration.
+                # Afterwards, use the learned policy.
+                if step < self.learning_starts:
+                    action = self.env.action_space.sample()
+                    # No need to rescale when sampling random action
+                    rescaled_action = action
+                else:
+                    action = self.policy_tf.step(obs[None], deterministic=False).flatten()
+                    # Rescale from [-1, 1] to the correct bounds
+                    rescaled_action = action * np.abs(self.action_space.low)
+
                 assert action.shape == self.env.action_space.shape
 
-                new_obs, reward, done, _ = self.env.step(action * np.abs(self.action_space.low))
+                new_obs, reward, done, info = self.env.step(rescaled_action)
+
                 # Store transition in the replay buffer.
                 self.replay_buffer.add(obs, action, reward, new_obs, float(done))
                 obs = new_obs
+
+                # Retrieve reward and episode length if using Monitor wrapper
+                maybe_ep_info = info.get('episode')
+                if maybe_ep_info is not None:
+                    ep_info_buf.extend([maybe_ep_info])
 
                 if writer is not None:
                     ep_reward = np.array([reward]).reshape((1, -1))
@@ -285,9 +306,10 @@ class SAC(OffPolicyRLModel):
                 num_episodes = len(episode_rewards)
                 if self.verbose >= 1 and done and log_interval is not None and len(episode_rewards) % log_interval == 0:
                     fps = int(step / (time.time() - start_time))
-                    logger.logkv("Total Timesteps", step)
-                    logger.logkv("Episodes", num_episodes)
-                    logger.logkv("Mean 100 episode reward", mean_reward)
+                    logger.logkv("episodes", num_episodes)
+                    logger.logkv("mean 100 episode reward", mean_reward)
+                    logger.logkv('ep_rewmean', safe_mean([ep_info['r'] for ep_info in ep_info_buf]))
+                    logger.logkv('eplenmean', safe_mean([ep_info['l'] for ep_info in ep_info_buf]))
                     # logger.logkv('eplenmean', )
                     # TODO: log entropy + explained variance
                     # + losses
@@ -298,6 +320,7 @@ class SAC(OffPolicyRLModel):
                     # logger.logkv('time_elapsed', t_start - t_first_start)
                     # for (loss_val, loss_name) in zip(loss_vals, self.loss_names):
                     #     logger.logkv(loss_name, loss_val)
+                    logger.logkv("total timesteps", step)
                     logger.dumpkvs()
             return self
 

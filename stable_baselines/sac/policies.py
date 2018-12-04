@@ -66,7 +66,7 @@ def apply_squashing_func(mu, pi, logp_pi):
     pi = tf.tanh(pi)
     # OpenAI Variation:
     # To avoid evil machine precision error, strictly clip 1-pi**2 to [0,1] range.
-    # logp_pi -= tf.reduce_sum(tf.log(clip_but_pass_gradient(1 - pi**2, l=0, u=1) + EPS), axis=1)
+    # logp_pi -= tf.reduce_sum(tf.log(clip_but_pass_gradient(1 - pi ** 2, lower=0, upper=1) + EPS), axis=1)
     # Squash correction (from original implementation)
     logp_pi -= tf.reduce_sum(tf.log(1 - pi ** 2 + EPS), axis=1)
     return mu, pi, logp_pi
@@ -213,6 +213,7 @@ class FeedForwardPolicy(SACPolicy):
         # OpenAI Variation to cap the standard deviation
         # activation = tf.tanh # for log_std
         # log_std = LOG_STD_MIN + 0.5 * (LOG_STD_MAX - LOG_STD_MIN) * (log_std + 1)
+        # Original Implementation
         log_std = tf.clip_by_value(log_std, LOG_STD_MIN, LOG_STD_MAX)
 
         std = tf.exp(log_std)
