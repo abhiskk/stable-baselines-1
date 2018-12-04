@@ -40,8 +40,8 @@ class SAC(OffPolicyRLModel):
     :param buffer_size: (int) size of the replay buffer
     :param batch_size: (int) Minibatch size for each gradient update
     :param tau: (float) the soft update coefficient ("polyak update", between 0 and 1)
-    :param reward_scale: (float) Scaling factor for raw reward. (entropy factor)
-        this is one of the most important hyperparameter for SAC
+    :param ent_coef: (float) Entropy regularization coefficient. (Equivalent to
+        inverse of reward scale in the original SAC paper.)  Controlling exploration/exploitation trade-off.
     :param train_freq: (int) Update the model every `train_freq` steps.
     :param learning_starts: (int) how many steps of the model to collect transitions for before learning starts
     :param target_update_interval: (int) update the target network every `target_network_update_freq` steps.
@@ -53,7 +53,7 @@ class SAC(OffPolicyRLModel):
 
     def __init__(self, policy, env, gamma=0.99, learning_rate=3e-3, buffer_size=50000,
                  learning_starts=100, train_freq=1, batch_size=32,
-                 tau=0.005, reward_scale=10, target_update_interval=1, gradient_steps=2,
+                 tau=0.005, ent_coef=0.2, target_update_interval=1, gradient_steps=2,
                  verbose=0, tensorboard_log=None, _init_setup_model=True):
         super(SAC, self).__init__(policy=policy, env=env, replay_buffer=None, verbose=verbose,
                                   policy_base=SACPolicy, requires_vec_env=False)
@@ -68,7 +68,9 @@ class SAC(OffPolicyRLModel):
         # self.policy_lr = learning_rate
         # self.qf_lr = learning_rate
         # self.vf_lr = learning_rate
-        self.reward_scale = reward_scale
+        # Entropy coefficient / Entropy temperature
+        # Inverse of the rewards scale
+        self.ent_coef = ent_coef
         self.target_update_interval = target_update_interval
         self.gradient_steps = gradient_steps
         self.gamma = gamma
@@ -142,7 +144,7 @@ class SAC(OffPolicyRLModel):
 
                     # Targets for Q and V regression
                     q_backup = tf.stop_gradient(
-                        self.reward_scale * self.rewards_ph +
+                        self.rewards_ph +
                         (1 - self.terminals_ph) * self.gamma * self.value_target
                     )
 
@@ -150,7 +152,7 @@ class SAC(OffPolicyRLModel):
                     qf2_loss = 0.5 * tf.reduce_mean((q_backup - qf2) ** 2)
 
                     # Alternative: policy_kl_loss = tf.reduce_mean(logp_pi - min_qf_pi)
-                    policy_kl_loss = tf.reduce_mean(logp_pi - qf1_pi)
+                    policy_kl_loss = tf.reduce_mean(self.ent_coef * logp_pi - qf1_pi)
 
                     # NOTE: in the original paper, they have an additional
                     # regularization loss for the gaussian parameters
@@ -160,7 +162,7 @@ class SAC(OffPolicyRLModel):
 
                     # We update the vf towards the min of two Q-functions in order to
                     # reduce overestimation bias from function approximation error.
-                    v_backup = tf.stop_gradient(min_qf_pi - logp_pi)
+                    v_backup = tf.stop_gradient(min_qf_pi - self.ent_coef * logp_pi)
                     value_loss = 0.5 * tf.reduce_mean((value_fn - v_backup) ** 2)
 
                     values_losses = qf1_loss + qf2_loss + value_loss
@@ -365,7 +367,7 @@ class SAC(OffPolicyRLModel):
             "train_freq": self.train_freq,
             "batch_size": self.batch_size,
             "tau": self.tau,
-            "reward_scale": self.reward_scale,
+            "ent_coef": self.ent_coef,
             # Should we also store the replay buffer?
             # this may lead to high memory usage
             # with all transition inside
