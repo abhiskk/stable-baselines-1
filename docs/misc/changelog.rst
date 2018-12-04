@@ -14,6 +14,7 @@ Pre-Release 2.2.2a (WIP)
 - fixed tensorboard logging in ppo2 when nminibatches=1
 - added early stoppping via callback return value (@erniejunior)
 - added Soft Actor-Critic (SAC) model
+- fixed a bug in DQN where prioritized_replay_beta_iters param was not used
 
 
 Release 2.2.1 (2018-11-18)
