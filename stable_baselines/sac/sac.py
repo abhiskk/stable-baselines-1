@@ -96,6 +96,7 @@ class SAC(OffPolicyRLModel):
         self.value_target = None
         self.step_ops = None
         self.target_update_op = None
+        self.infos_names = None
 
         if _init_setup_model:
             self.setup_model()
@@ -193,18 +194,20 @@ class SAC(OffPolicyRLModel):
                     with tf.control_dependencies([policy_train_op]):
                         train_values_op = value_optimizer.minimize(values_losses, var_list=values_params)
 
+                        self.infos_names = ['policy_loss', 'qf1_loss', 'qf2_loss', 'value_loss']
                         # All ops to call during one training step
                         self.step_ops = [policy_loss, qf1_loss, qf2_loss,
                                          value_loss, qf1, qf2, value_fn, logp_pi,
                                          policy_train_op, train_values_op]
 
-                    # tf.summary.scalar('actor_loss', self.actor_loss)
-                    # tf.summary.scalar('critic_loss', self.critic_loss)
+                    tf.summary.scalar('policy_loss', policy_loss)
+                    tf.summary.scalar('qf1_loss', qf1_loss)
+                    tf.summary.scalar('qf2_loss', qf2_loss)
+                    tf.summary.scalar('value_loss', value_loss)
 
-                with tf.variable_scope("input_info", reuse=False):
-                    pass
-                    # tf.summary.scalar('rewards', tf.reduce_mean(self.rewards_ph))
-                    # tf.summary.histogram('rewards', self.rewards_ph)
+                # with tf.variable_scope("input_info", reuse=False):
+                #     tf.summary.scalar('rewards', tf.reduce_mean(self.rewards_ph))
+                #     tf.summary.histogram('rewards', self.rewards_ph)
 
                 # IMPORTANT: are the target variables also saved ?
                 self.params = find_trainable_variables("model")
@@ -227,13 +230,21 @@ class SAC(OffPolicyRLModel):
             self.rewards_ph: batch_rewards.reshape(self.batch_size, -1),
             self.terminals_ph: batch_dones.reshape(self.batch_size, -1),
         }
+        # self.step_ops = [policy_loss, qf1_loss, qf2_loss,
+        #                  value_loss, qf1, qf2, value_fn, logp_pi,
+        #                  policy_train_op, train_values_op]
+
         if writer is not None:
             out = self.sess.run([self.summary] + self.step_ops, feed_dict)
-            summary, policy_loss, qf1_loss, qf2_loss, value_loss, qf1, qf2, value_fn, logp_pi, _, _ = out
+            summary = out.pop(0)
             writer.add_summary(summary, step)
         else:
             out = self.sess.run(self.step_ops, feed_dict)
-            policy_loss, qf1_loss, qf2_loss, value_loss, qf1, qf2, value_fn, logp_pi, _, _ = out
+
+        policy_loss, qf1_loss, qf2_loss, value_loss, *values = out
+        qf1, qf2, value_fn, logp_pi, *_ = values
+
+        return policy_loss, qf1_loss, qf2_loss, value_loss
 
     def learn(self, total_timesteps, callback=None, seed=None, log_interval=100, tb_log_name="SAC"):
         with SetVerbosity(self.verbose), TensorboardWriter(self.graph, self.tensorboard_log, tb_log_name) as writer:
@@ -284,13 +295,17 @@ class SAC(OffPolicyRLModel):
                     self.episode_reward = total_episode_reward_logger(self.episode_reward, ep_reward,
                                                                       ep_done, writer, step)
 
+                mb_infos_vals = []
                 for grad_step in range(self.gradient_steps):
                     if step < self.batch_size or step < self.learning_starts:
                         break
-                    self._train_step(step, writer)
+                    mb_infos_vals.append(self._train_step(step, writer))
                     if (step + grad_step) % self.target_update_interval == 0:
                         # Update target network
                         self.sess.run(self.target_update_op)
+
+                if len(mb_infos_vals) > 0:
+                    mb_infos_vals = np.mean(mb_infos_vals, axis=0)
 
                 episode_rewards[-1] += reward
                 if done:
@@ -318,8 +333,9 @@ class SAC(OffPolicyRLModel):
                     logger.logkv("fps", fps)
                     # logger.logkv("explained_variance", float(explained_var))
                     # logger.logkv('time_elapsed', t_start - t_first_start)
-                    # for (loss_val, loss_name) in zip(loss_vals, self.loss_names):
-                    #     logger.logkv(loss_name, loss_val)
+                    if len(mb_infos_vals) > 0:
+                        for (name, val) in zip(self.infos_names, mb_infos_vals):
+                            logger.logkv(name, val)
                     logger.logkv("total timesteps", step)
                     logger.dumpkvs()
             return self
