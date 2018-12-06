@@ -12,7 +12,7 @@ from stable_baselines.ppo2 import PPO2
 from stable_baselines.trpo_mpi import TRPO
 from stable_baselines.sac import SAC
 
-__version__ = "2.2.2a"
+__version__ = "2.4.0a"
 
 
 # patch Gym spaces to add equality functions, if not implemented
