@@ -248,7 +248,7 @@ class SAC(OffPolicyRLModel):
 
         return policy_loss, qf1_loss, qf2_loss, value_loss
 
-    def learn(self, total_timesteps, callback=None, seed=None, log_interval=100, tb_log_name="SAC"):
+    def learn(self, total_timesteps, callback=None, seed=None, log_interval=4, tb_log_name="SAC"):
         with SetVerbosity(self.verbose), TensorboardWriter(self.graph, self.tensorboard_log, tb_log_name) as writer:
             self._setup_learn(seed)
 
