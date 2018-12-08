@@ -119,7 +119,10 @@ class SAC(OffPolicyRLModel):
 
                     # Initialize Placeholders
                     self.observations_ph = self.policy_tf.obs_ph
+                    # Normalized observation for pixels
+                    self.processed_obs_ph = self.policy_tf.processed_obs
                     self.next_observations_ph = self.target_policy.obs_ph
+                    self.processed_next_obs_ph = self.target_policy.processed_obs
                     self.action_target = self.target_policy.action_ph
                     self.terminals_ph = tf.placeholder(tf.float32, shape=(None, 1), name='terminals')
                     self.rewards_ph = tf.placeholder(tf.float32, shape=(None, 1), name='rewards')
@@ -131,20 +134,20 @@ class SAC(OffPolicyRLModel):
                     # mu corresponds to deterministic actions
                     # pi  corresponds to stochastic actions, used for training
                     # logp_pi is the log probabilty of action pi
-                    _, policy_out, logp_pi = self.policy_tf.make_actor(self.observations_ph)
+                    _, policy_out, logp_pi = self.policy_tf.make_actor(self.processed_obs_ph)
                     # Monitor the entropy of the policy,
                     # this is not used for training
                     self.entropy = tf.reduce_mean(self.policy_tf.entropy)
                     #  Use two Q-functions to improve performance by reducing overestimation bias.
-                    qf1, qf2, value_fn = self.policy_tf.make_critics(self.observations_ph, self.actions_ph,
+                    qf1, qf2, value_fn = self.policy_tf.make_critics(self.processed_obs_ph, self.actions_ph,
                                                                      create_qf=True, create_vf=True)
-                    qf1_pi, qf2_pi, _ = self.policy_tf.make_critics(self.observations_ph,
+                    qf1_pi, qf2_pi, _ = self.policy_tf.make_critics(self.processed_obs_ph,
                                                                     policy_out, create_qf=True, create_vf=False,
                                                                     reuse=True)
 
                 with tf.variable_scope("target", reuse=False):
                     # Create the value network
-                    _, _, value_target = self.target_policy.make_critics(self.next_observations_ph,
+                    _, _, value_target = self.target_policy.make_critics(self.processed_next_obs_ph,
                                                                          create_qf=False, create_vf=True)
                     self.value_target = value_target
 
