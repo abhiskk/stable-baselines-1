@@ -28,7 +28,7 @@ class SAC(OffPolicyRLModel):
     Soft Actor-Critic (SAC)
     Off-Policy Maximum Entropy Deep Reinforcement Learning with a Stochastic Actor,
     This implementation borrows code from original implementation (https://github.com/haarnoja/sac)
-    and from OpenAI Spinning (https://github.com/openai/spinningup)
+    and from OpenAI Spinning Up (https://github.com/openai/spinningup)
     Paper: https://arxiv.org/abs/1801.01290
     Introduction to SAC: https://spinningup.openai.com/en/latest/algorithms/sac.html
 
@@ -69,7 +69,7 @@ class SAC(OffPolicyRLModel):
         # self.qf_lr = learning_rate
         # self.vf_lr = learning_rate
         # Entropy coefficient / Entropy temperature
-        # Inverse of the rewards scale
+        # Inverse of the reward scale
         self.ent_coef = ent_coef
         self.target_update_interval = target_update_interval
         self.gradient_steps = gradient_steps
@@ -114,6 +114,7 @@ class SAC(OffPolicyRLModel):
                 self.replay_buffer = ReplayBuffer(self.buffer_size)
 
                 with tf.variable_scope("input", reuse=False):
+                    # Create policy and target TF objects
                     self.policy_tf = self.policy(self.sess, self.observation_space, self.action_space)
                     self.target_policy = self.policy(self.sess, self.observation_space, self.action_space)
 
@@ -127,7 +128,13 @@ class SAC(OffPolicyRLModel):
                                                      name='actions')
 
                 with tf.variable_scope("model", reuse=False):
+                    # Create the policy
+                    # mu corresponds to deterministic actions
+                    # pi  corresponds to stochastic actions, used for training
+                    # logp_pi is the log probabilty of action pi
                     mu, pi, logp_pi = self.policy_tf.make_actor(self.observations_ph)
+                    # Monitor the entropy of the policy,
+                    # this is not used for training
                     self.entropy = tf.reduce_mean(self.policy_tf.entropy)
                     #  Use two Q-functions to improve performance by reducing overestimation bias.
                     qf1, qf2, value_fn = self.policy_tf.make_critics(self.observations_ph, self.actions_ph,
@@ -137,6 +144,7 @@ class SAC(OffPolicyRLModel):
                                                                     reuse=True)
 
                 with tf.variable_scope("target", reuse=False):
+                    # Create the value network
                     _, _, value_target = self.target_policy.make_critics(self.next_observations_ph,
                                                                          create_qf=False, create_vf=True)
                     self.value_target = value_target
@@ -151,13 +159,16 @@ class SAC(OffPolicyRLModel):
                         (1 - self.terminals_ph) * self.gamma * self.value_target
                     )
 
+                    # Compute Q-Function loss
+                    # TODO: test with huber loss (it would avoid too high values)
                     qf1_loss = 0.5 * tf.reduce_mean((q_backup - qf1) ** 2)
                     qf2_loss = 0.5 * tf.reduce_mean((q_backup - qf2) ** 2)
 
+                    # Compute the policy loss
                     # Alternative: policy_kl_loss = tf.reduce_mean(logp_pi - min_qf_pi)
                     policy_kl_loss = tf.reduce_mean(self.ent_coef * logp_pi - qf1_pi)
 
-                    # NOTE: in the original paper, they have an additional
+                    # NOTE: in the original implementation, they have an additional
                     # regularization loss for the gaussian parameters
                     # this is not used for now
                     # policy_loss = (policy_kl_loss + policy_regularization_loss)
@@ -189,13 +200,14 @@ class SAC(OffPolicyRLModel):
                         tf.assign(target, (1 - self.tau) * target + self.tau * source)
                         for target, source in zip(target_params, source_params)
                     ]
-                    # Initializing targets to match source variables
+                    # Initializing target to match source variables
                     target_init_op = [
                         tf.assign(target, source)
                         for target, source in zip(target_params, source_params)
                     ]
 
-                    # (control flow because sess.run otherwise evaluates in nondeterministic order)
+                    # Control flow is used because sess.run otherwise evaluates in nondeterministic order
+                    # and we first need to compute the policy action before computing q values losses
                     with tf.control_dependencies([policy_train_op]):
                         train_values_op = value_optimizer.minimize(values_losses, var_list=values_params)
 
@@ -205,13 +217,14 @@ class SAC(OffPolicyRLModel):
                                          value_loss, qf1, qf2, value_fn, logp_pi,
                                          self.entropy, policy_train_op, train_values_op]
 
+                    # Monitor losses and entropy in tensorboard
                     tf.summary.scalar('policy_loss', policy_loss)
                     tf.summary.scalar('qf1_loss', qf1_loss)
                     tf.summary.scalar('qf2_loss', qf2_loss)
                     tf.summary.scalar('value_loss', value_loss)
                     tf.summary.scalar('entropy', self.entropy)
 
-                # IMPORTANT: are the target variables also saved ?
+                # Retrieve parameters that must be saved
                 self.params = find_trainable_variables("model")
                 self.target_params = find_trainable_variables("target/values_fn/vf")
 
@@ -234,9 +247,10 @@ class SAC(OffPolicyRLModel):
             self.rewards_ph: batch_rewards.reshape(self.batch_size, -1),
             self.terminals_ph: batch_dones.reshape(self.batch_size, -1),
         }
-        # self.step_ops = [policy_loss, qf1_loss, qf2_loss,
-        #                  value_loss, qf1, qf2, value_fn, logp_pi,
-        #                  self.entropy, policy_train_op, train_values_op]
+
+        # out  = [policy_loss, qf1_loss, qf2_loss,
+        #         value_loss, qf1, qf2, value_fn, logp_pi,
+        #         self.entropy, policy_train_op, train_values_op]
 
         # Do one gradient step
         # and optionally compute log for tensorboard
@@ -300,6 +314,7 @@ class SAC(OffPolicyRLModel):
                     ep_info_buf.extend([maybe_ep_info])
 
                 if writer is not None:
+                    # Write reward per episode to tensorboard
                     ep_reward = np.array([reward]).reshape((1, -1))
                     ep_done = np.array([done]).reshape((1, -1))
                     self.episode_reward = total_episode_reward_logger(self.episode_reward, ep_reward,
@@ -307,15 +322,18 @@ class SAC(OffPolicyRLModel):
 
                 if step % self.train_freq == 0:
                     mb_infos_vals = []
+                    # Update policy, critics and target networks
                     for grad_step in range(self.gradient_steps):
                         if step < self.batch_size or step < self.learning_starts:
                             break
                         n_updates += 1
+                        # Update policy and critics (q functions)
                         mb_infos_vals.append(self._train_step(step, writer))
+                        # Update target network
                         if (step + grad_step) % self.target_update_interval == 0:
                             # Update target network
                             self.sess.run(self.target_update_op)
-
+                    # Log losses and entropy, useful for monitor training
                     if len(mb_infos_vals) > 0:
                         infos_values = np.mean(mb_infos_vals, axis=0)
 
@@ -331,6 +349,7 @@ class SAC(OffPolicyRLModel):
                     mean_reward = round(float(np.mean(episode_rewards[-101:-1])), 1)
 
                 num_episodes = len(episode_rewards)
+                # Display training infos
                 if self.verbose >= 1 and done and log_interval is not None and len(episode_rewards) % log_interval == 0:
                     fps = int(step / (time.time() - start_time))
                     logger.logkv("episodes", num_episodes)
@@ -350,7 +369,9 @@ class SAC(OffPolicyRLModel):
             return self
 
     def action_probability(self, observation, state=None, mask=None):
-        raise NotImplementedError
+        # Here there are no action probabilities, as SAC is continuous
+        # therefore we return the action vector
+        return self.predict(observation, state, mask, deterministic=True)[0]
 
     def predict(self, observation, state=None, mask=None, deterministic=True):
         observation = np.array(observation)
