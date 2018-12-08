@@ -1,4 +1,6 @@
+import sys
 import time
+import multiprocessing
 from collections import deque
 
 import numpy as np
@@ -108,7 +110,11 @@ class SAC(OffPolicyRLModel):
         with SetVerbosity(self.verbose):
             self.graph = tf.Graph()
             with self.graph.as_default():
-                self.sess = tf_util.single_threaded_session(graph=self.graph)
+                n_cpu = multiprocessing.cpu_count()
+                if sys.platform == 'darwin':
+                    n_cpu //= 2
+                self.sess = tf_util.make_session(num_cpu=n_cpu, graph=self.graph)
+
 
                 self.replay_buffer = ReplayBuffer(self.buffer_size)
 
