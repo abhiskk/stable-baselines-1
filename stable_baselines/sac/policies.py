@@ -203,7 +203,7 @@ class FeedForwardPolicy(SACPolicy):
 
     def make_actor(self, obs=None, reuse=False, scope="pi"):
         if obs is None:
-            obs = self.processed_x
+            obs = self.processed_obs
 
         with tf.variable_scope(scope, reuse=reuse):
             if self.feature_extraction == "cnn":
@@ -245,7 +245,7 @@ class FeedForwardPolicy(SACPolicy):
     def make_critics(self, obs=None, action=None, reuse=False, scope="values_fn",
                      create_vf=True, create_qf=True):
         if obs is None:
-            obs = self.processed_x
+            obs = self.processed_obs
 
         with tf.variable_scope(scope, reuse=reuse):
             if self.feature_extraction == "cnn":

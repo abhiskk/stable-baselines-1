@@ -53,7 +53,7 @@ class SAC(OffPolicyRLModel):
 
     def __init__(self, policy, env, gamma=0.99, learning_rate=3e-3, buffer_size=50000,
                  learning_starts=100, train_freq=1, batch_size=64,
-                 tau=0.005, ent_coef=0.2, target_update_interval=1, gradient_steps=2,
+                 tau=0.005, ent_coef=0.1, target_update_interval=1, gradient_steps=1,
                  verbose=0, tensorboard_log=None, _init_setup_model=True):
         super(SAC, self).__init__(policy=policy, env=env, replay_buffer=None, verbose=verbose,
                                   policy_base=SACPolicy, requires_vec_env=False)
