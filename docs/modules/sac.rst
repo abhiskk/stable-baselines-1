@@ -30,6 +30,18 @@ Notes
 - OpenAI Spinning Guide for SAC: https://spinningup.openai.com/en/latest/algorithms/sac.html
 - Original Implementation: https://github.com/haarnoja/sac
 
+.. note::
+
+	In our implementation, we use an entropy coefficient (as in OpenAI Spinning or Facebook Horizon), which is the equivalent to
+  the inverse of reward scale in the original SAC paper.
+  The main reason is that it avoids having too high errors when updating the Q functions.
+
+
+.. note::
+
+	The default policies for SAC differ a bit from others MlpPolicy:
+  it uses ReLU instead of tanh activation, to match the original paper
+
 Can I use?
 ----------
 

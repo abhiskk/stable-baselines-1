@@ -24,6 +24,16 @@ def gaussian_logp(input_, mu, log_std):
     return tf.reduce_sum(pre_sum, axis=1)
 
 
+def gaussian_entropy(log_std):
+    """
+    Compute the entropy for a diagonal gaussian distribution.
+
+    :param log_std: (tf.Tensor) Log of the standard deviation
+    :return: (tf.Tensor)
+    """
+    return tf.reduce_sum(log_std + 0.5 * np.log(2.0 * np.pi * np.e), axis=-1)
+
+
 def mlp(input_ph, layers, activ_fn=tf.nn.relu, layer_norm=False):
     """
     Create a multi-layer fully connected neural network.
@@ -183,10 +193,13 @@ class FeedForwardPolicy(SACPolicy):
         self.layers = layers
         self.reg_loss = None
         self.reg_weight = reg_weight
+        self.entropy = None
 
         assert len(layers) >= 1, "Error: must have at least one hidden layer for the policy."
 
         self.activ_fn = tf.nn.relu
+        # TODO: check perf with tanh instead of relu (original paper)
+        # self.activ_fn = tf.tanh
 
     def make_actor(self, obs=None, reuse=False, scope="pi"):
         if obs is None:
@@ -220,6 +233,7 @@ class FeedForwardPolicy(SACPolicy):
         # Reparameterization trick
         pi = mu + tf.random_normal(tf.shape(mu)) * std
         logp_pi = gaussian_logp(pi, mu, log_std)
+        self.entropy = gaussian_entropy(log_std)
         # MISSING: reg params for log and mu
         # Apply squashing and account for it in the probabilty
         mu, pi, logp_pi = apply_squashing_func(mu, pi, logp_pi)

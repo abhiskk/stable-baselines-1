@@ -52,7 +52,7 @@ class SAC(OffPolicyRLModel):
     """
 
     def __init__(self, policy, env, gamma=0.99, learning_rate=3e-3, buffer_size=50000,
-                 learning_starts=100, train_freq=1, batch_size=32,
+                 learning_starts=100, train_freq=1, batch_size=64,
                  tau=0.005, ent_coef=0.2, target_update_interval=1, gradient_steps=2,
                  verbose=0, tensorboard_log=None, _init_setup_model=True):
         super(SAC, self).__init__(policy=policy, env=env, replay_buffer=None, verbose=verbose,
@@ -99,6 +99,7 @@ class SAC(OffPolicyRLModel):
         self.step_ops = None
         self.target_update_op = None
         self.infos_names = None
+        self.entropy = None
 
         if _init_setup_model:
             self.setup_model()
@@ -126,6 +127,7 @@ class SAC(OffPolicyRLModel):
 
                 with tf.variable_scope("model", reuse=False):
                     mu, pi, logp_pi = self.policy_tf.make_actor(self.observations_ph)
+                    self.entropy = tf.reduce_mean(self.policy_tf.entropy)
                     #  Use two Q-functions to improve performance by reducing overestimation bias.
                     qf1, qf2, value_fn = self.policy_tf.make_critics(self.observations_ph, self.actions_ph,
                                                                      create_qf=True, create_vf=True)
@@ -196,16 +198,17 @@ class SAC(OffPolicyRLModel):
                     with tf.control_dependencies([policy_train_op]):
                         train_values_op = value_optimizer.minimize(values_losses, var_list=values_params)
 
-                        self.infos_names = ['policy_loss', 'qf1_loss', 'qf2_loss', 'value_loss']
+                        self.infos_names = ['policy_loss', 'qf1_loss', 'qf2_loss', 'value_loss', 'entropy']
                         # All ops to call during one training step
                         self.step_ops = [policy_loss, qf1_loss, qf2_loss,
                                          value_loss, qf1, qf2, value_fn, logp_pi,
-                                         policy_train_op, train_values_op]
+                                         self.entropy, policy_train_op, train_values_op]
 
                     tf.summary.scalar('policy_loss', policy_loss)
                     tf.summary.scalar('qf1_loss', qf1_loss)
                     tf.summary.scalar('qf2_loss', qf2_loss)
                     tf.summary.scalar('value_loss', value_loss)
+                    tf.summary.scalar('entropy', self.entropy)
 
                 # with tf.variable_scope("input_info", reuse=False):
                 #     tf.summary.scalar('rewards', tf.reduce_mean(self.rewards_ph))
@@ -234,7 +237,7 @@ class SAC(OffPolicyRLModel):
         }
         # self.step_ops = [policy_loss, qf1_loss, qf2_loss,
         #                  value_loss, qf1, qf2, value_fn, logp_pi,
-        #                  policy_train_op, train_values_op]
+        #                  self.entropy, policy_train_op, train_values_op]
 
         if writer is not None:
             out = self.sess.run([self.summary] + self.step_ops, feed_dict)
@@ -244,9 +247,9 @@ class SAC(OffPolicyRLModel):
             out = self.sess.run(self.step_ops, feed_dict)
 
         policy_loss, qf1_loss, qf2_loss, value_loss, *values = out
-        qf1, qf2, value_fn, logp_pi, *_ = values
+        qf1, qf2, value_fn, logp_pi, entropy, *_ = values
 
-        return policy_loss, qf1_loss, qf2_loss, value_loss
+        return policy_loss, qf1_loss, qf2_loss, value_loss, entropy
 
     def learn(self, total_timesteps, callback=None, seed=None, log_interval=4, tb_log_name="SAC"):
         with SetVerbosity(self.verbose), TensorboardWriter(self.graph, self.tensorboard_log, tb_log_name) as writer:
@@ -258,6 +261,8 @@ class SAC(OffPolicyRLModel):
             reset = True
             self.episode_reward = np.zeros((1,))
             ep_info_buf = deque(maxlen=100)
+            n_updates = 0
+            infos_values = []
 
             for step in range(total_timesteps):
                 if callback is not None:
@@ -297,17 +302,19 @@ class SAC(OffPolicyRLModel):
                     self.episode_reward = total_episode_reward_logger(self.episode_reward, ep_reward,
                                                                       ep_done, writer, step)
 
-                mb_infos_vals = []
-                for grad_step in range(self.gradient_steps):
-                    if step < self.batch_size or step < self.learning_starts:
-                        break
-                    mb_infos_vals.append(self._train_step(step, writer))
-                    if (step + grad_step) % self.target_update_interval == 0:
-                        # Update target network
-                        self.sess.run(self.target_update_op)
+                if step % self.train_freq == 0:
+                    mb_infos_vals = []
+                    for grad_step in range(self.gradient_steps):
+                        if step < self.batch_size or step < self.learning_starts:
+                            break
+                        n_updates += 1
+                        mb_infos_vals.append(self._train_step(step, writer))
+                        if (step + grad_step) % self.target_update_interval == 0:
+                            # Update target network
+                            self.sess.run(self.target_update_op)
 
-                if len(mb_infos_vals) > 0:
-                    mb_infos_vals = np.mean(mb_infos_vals, axis=0)
+                    if len(mb_infos_vals) > 0:
+                        infos_values = np.mean(mb_infos_vals, axis=0)
 
                 episode_rewards[-1] += reward
                 if done:
@@ -327,19 +334,16 @@ class SAC(OffPolicyRLModel):
                     logger.logkv("mean 100 episode reward", mean_reward)
                     logger.logkv('ep_rewmean', safe_mean([ep_info['r'] for ep_info in ep_info_buf]))
                     logger.logkv('eplenmean', safe_mean([ep_info['l'] for ep_info in ep_info_buf]))
-                    # logger.logkv('eplenmean', )
-                    # TODO: log entropy + explained variance
-                    # + losses
-                    # explained_var = explained_variance(values, returns)
-                    # logger.logkv("nupdates", update)
+                    logger.logkv("n_updates", n_updates)
                     logger.logkv("fps", fps)
-                    # logger.logkv("explained_variance", float(explained_var))
-                    # logger.logkv('time_elapsed', t_start - t_first_start)
-                    if len(mb_infos_vals) > 0:
-                        for (name, val) in zip(self.infos_names, mb_infos_vals):
+                    logger.logkv('time_elapsed', int(time.time() - start_time))
+                    if len(infos_values) > 0:
+                        for (name, val) in zip(self.infos_names, infos_values):
                             logger.logkv(name, val)
                     logger.logkv("total timesteps", step)
                     logger.dumpkvs()
+                    # Reset infos:
+                    infos_values = []
             return self
 
     def action_probability(self, observation, state=None, mask=None):
