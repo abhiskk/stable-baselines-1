@@ -258,6 +258,7 @@ class DDPG(OffPolicyRLModel):
         self.summary = None
         self.episode_reward = None
         self.tb_seen_steps = None
+        self.target_params = None
 
         if _init_setup_model:
             self.setup_model()
@@ -380,6 +381,7 @@ class DDPG(OffPolicyRLModel):
                     tf.summary.scalar('critic_loss', self.critic_loss)
 
                 self.params = find_trainable_variables("model")
+                self.target_params = find_trainable_variables("target")
 
                 with self.sess.as_default():
                     self._initialize(self.sess)
@@ -992,8 +994,9 @@ class DDPG(OffPolicyRLModel):
         }
 
         params = self.sess.run(self.params)
+        target_params = self.sess.run(self.target_params)
 
-        self._save_to_file(save_path, data=data, params=params)
+        self._save_to_file(save_path, data=data, params=params + target_params)
 
     @classmethod
     def load(cls, load_path, env=None, **kwargs):
@@ -1006,7 +1009,7 @@ class DDPG(OffPolicyRLModel):
         model.setup_model()
 
         restores = []
-        for param, loaded_p in zip(model.params, params):
+        for param, loaded_p in zip(model.params + model.target_params, params):
             restores.append(param.assign(loaded_p))
         model.sess.run(restores)
 

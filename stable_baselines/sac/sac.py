@@ -100,6 +100,7 @@ class SAC(OffPolicyRLModel):
         self.target_update_op = None
         self.infos_names = None
         self.entropy = None
+        self.target_params = None
 
         if _init_setup_model:
             self.setup_model()
@@ -210,12 +211,9 @@ class SAC(OffPolicyRLModel):
                     tf.summary.scalar('value_loss', value_loss)
                     tf.summary.scalar('entropy', self.entropy)
 
-                # with tf.variable_scope("input_info", reuse=False):
-                #     tf.summary.scalar('rewards', tf.reduce_mean(self.rewards_ph))
-                #     tf.summary.histogram('rewards', self.rewards_ph)
-
                 # IMPORTANT: are the target variables also saved ?
                 self.params = find_trainable_variables("model")
+                self.target_params = find_trainable_variables("target/values_fn/vf")
 
                 # Initialize Variables and target network
                 with self.sess.as_default():
@@ -225,6 +223,7 @@ class SAC(OffPolicyRLModel):
                 self.summary = tf.summary.merge_all()
 
     def _train_step(self, step, writer):
+        # Sample a batch from the replay buffer
         batch = self.replay_buffer.sample(self.batch_size)
         batch_obs, batch_actions, batch_rewards, batch_next_obs, batch_dones = batch
 
@@ -239,6 +238,8 @@ class SAC(OffPolicyRLModel):
         #                  value_loss, qf1, qf2, value_fn, logp_pi,
         #                  self.entropy, policy_train_op, train_values_op]
 
+        # Do one gradient step
+        # and optionally compute log for tensorboard
         if writer is not None:
             out = self.sess.run([self.summary] + self.step_ops, feed_dict)
             summary = out.pop(0)
@@ -246,8 +247,10 @@ class SAC(OffPolicyRLModel):
         else:
             out = self.sess.run(self.step_ops, feed_dict)
 
+        # Unpack to monitor losses and entropy
         policy_loss, qf1_loss, qf2_loss, value_loss, *values = out
-        qf1, qf2, value_fn, logp_pi, entropy, *_ = values
+        # qf1, qf2, value_fn, logp_pi, entropy, *_ = values
+        entropy = values[4]
 
         return policy_loss, qf1_loss, qf2_loss, value_loss, entropy
 
@@ -386,8 +389,9 @@ class SAC(OffPolicyRLModel):
         }
 
         params = self.sess.run(self.params)
+        target_params = self.sess.run(self.target_params)
 
-        self._save_to_file(save_path, data=data, params=params)
+        self._save_to_file(save_path, data=data, params=params + target_params)
 
     @classmethod
     def load(cls, load_path, env=None, **kwargs):
@@ -400,7 +404,7 @@ class SAC(OffPolicyRLModel):
         model.setup_model()
 
         restores = []
-        for param, loaded_p in zip(model.params, params):
+        for param, loaded_p in zip(model.params + model.target_params, params):
             restores.append(param.assign(loaded_p))
         model.sess.run(restores)
 
