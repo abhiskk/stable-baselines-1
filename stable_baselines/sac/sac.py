@@ -76,7 +76,6 @@ class SAC(OffPolicyRLModel):
         self.gamma = gamma
 
         self.value_fn = None
-        self.mu = None
         self.graph = None
         self.replay_buffer = None
         self.episode_reward = None
