@@ -132,7 +132,7 @@ class SAC(OffPolicyRLModel):
                     # mu corresponds to deterministic actions
                     # pi  corresponds to stochastic actions, used for training
                     # logp_pi is the log probabilty of action pi
-                    mu, pi, logp_pi = self.policy_tf.make_actor(self.observations_ph)
+                    _, policy_out, logp_pi = self.policy_tf.make_actor(self.observations_ph)
                     # Monitor the entropy of the policy,
                     # this is not used for training
                     self.entropy = tf.reduce_mean(self.policy_tf.entropy)
@@ -140,7 +140,7 @@ class SAC(OffPolicyRLModel):
                     qf1, qf2, value_fn = self.policy_tf.make_critics(self.observations_ph, self.actions_ph,
                                                                      create_qf=True, create_vf=True)
                     qf1_pi, qf2_pi, _ = self.policy_tf.make_critics(self.observations_ph,
-                                                                    pi, create_qf=True, create_vf=False,
+                                                                    policy_out, create_qf=True, create_vf=False,
                                                                     reuse=True)
 
                 with tf.variable_scope("target", reuse=False):
@@ -275,7 +275,6 @@ class SAC(OffPolicyRLModel):
             start_time = time.time()
             episode_rewards = [0.0]
             obs = self.env.reset()
-            reset = True
             self.episode_reward = np.zeros((1,))
             ep_info_buf = deque(maxlen=100)
             n_updates = 0
